@@ -35,6 +35,13 @@ Time: 1-3 devs frontend. Fluxo: PRD → Figma (quando houver) → implementaçã
 
 ## Regras obrigatórias (guardrails)
 - Rodar lint e testes (Jest) antes de considerar qualquer tarefa concluída
-- Nunca commitar direto em `main` — sempre branch + PR
+- Nunca commitar direto em `main` — sempre branch + PR (reforçado por hook local, ver abaixo)
 - Nunca alterar config de deploy Netlify (`netlify.toml`, env vars) sem aprovação explícita
 - PRs devem ter testes Jest cobrindo o que foi alterado
+
+## Setup único por clone
+Depois de clonar o repositório, rode uma vez:
+```
+git config core.hooksPath .githooks
+```
+Isso ativa o hook de pre-commit que bloqueia commit direto nas branches `main`/`master`.
