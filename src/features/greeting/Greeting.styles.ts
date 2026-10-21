@@ -17,3 +17,9 @@ export const NameInput = styled.input`
   border-radius: 4px;
   margin-top: 0.5rem;
 `
+
+export const CharCount = styled.p`
+  font-size: 0.85rem;
+  color: #6b7280;
+  margin-top: 0.25rem;
+`

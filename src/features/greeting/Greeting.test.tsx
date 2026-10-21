@@ -41,3 +41,27 @@ test('volta para "visitante" se o campo for limpo', async () => {
 
   expect(screen.getByText('Olá, visitante!')).toBeInTheDocument()
 })
+
+test('mostra "0 caracteres" quando o campo está vazio', () => {
+  render(
+    <AppProvider>
+      <Greeting />
+    </AppProvider>,
+  )
+
+  expect(screen.getByText('0 caracteres')).toBeInTheDocument()
+})
+
+test('mostra "3 caracteres" ao digitar "Ana"', async () => {
+  const user = userEvent.setup()
+  render(
+    <AppProvider>
+      <Greeting />
+    </AppProvider>,
+  )
+
+  const input = screen.getByLabelText('Seu nome')
+  await user.type(input, 'Ana')
+
+  expect(screen.getByText('3 caracteres')).toBeInTheDocument()
+})
