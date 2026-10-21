@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash(npm run lint)",
+      "Bash(npm run test:*)",
+      "Bash(npm run build)",
+      "Bash(npm run dev)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git checkout -b *)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(npm install:*)",
+      "Edit(*.env*)",
+      "Edit(netlify.toml)",
+      "Edit(package.json)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push origin main)",
+      "Bash(rm -rf:*)",
+      "Bash(netlify deploy --prod:*)"
+    ]
+  }
+}
