@@ -1,0 +1,73 @@
+name: Agente implementa PRD automaticamente
+
+# Gatilho do Nível 2: uma PRD nova (ou alterada) chegando em main dispara
+# o agente em modo headless, sem nenhum humano abrir sessão.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'prds/**.md'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detectar PRD nova/alterada neste push
+        id: prd
+        run: |
+          file=$(git diff --name-only HEAD^ HEAD -- 'prds/*.md' | head -1)
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "PRD detectada: $file"
+
+      - uses: actions/setup-node@v4
+        if: steps.prd.outputs.file != ''
+        with:
+          node-version: '20'
+
+      - name: Instalar Claude Code
+        if: steps.prd.outputs.file != ''
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Criar branch e acionar o agente (modo headless)
+        if: steps.prd.outputs.file != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PRD_FILE: ${{ steps.prd.outputs.file }}
+        run: |
+          git config user.name "agente-ci"
+          git config user.email "agente-ci@users.noreply.github.com"
+          slug=$(basename "$PRD_FILE" .md)
+          branch="agent/$slug"
+          git checkout -b "$branch"
+
+          # --permission-mode acceptEdits: aceita edições sem perguntar, porque
+          # não há humano aqui para aprovar. Os guardrails de .claude/settings.json
+          # (allow/ask/deny) e os hooks continuam valendo - "ask" nesse modo
+          # se comporta como bloqueio, nunca como aprovação automática.
+          claude -p "Implemente a PRD em $PRD_FILE seguindo exatamente o CLAUDE.md deste
+          repositório e a skill criar-feature-react. Ao final, rode npm run lint e
+          npm run test e garanta que os dois passam antes de parar." \
+            --permission-mode acceptEdits
+
+          git add -A
+          git commit -m "feat: implementação automática a partir de $PRD_FILE" || echo "nada para commitar"
+          git push -u origin "$branch"
+          echo "branch=$branch" >> "$GITHUB_ENV"
+
+      - name: Abrir PR
+        if: steps.prd.outputs.file != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --title "feat: implementação automática de ${{ steps.prd.outputs.file }}" \
+            --body "PR aberto automaticamente pelo agente a partir da PRD \`${{ steps.prd.outputs.file }}\`. Precisa passar pelo CI e pela revisão antes de mergear — este workflow só abre o PR, nunca mergeia." \
+            --base main --head "$branch"
