@@ -28,5 +28,18 @@
       "Bash(rm -rf:*)",
       "Bash(netlify deploy --prod:*)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh .claude/hooks/block-dangerous-bash.sh"
+          }
+        ]
+      }
+    ]
   }
 }
