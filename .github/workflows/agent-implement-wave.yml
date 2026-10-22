@@ -67,7 +67,7 @@ jobs:
           git config user.name "agente-ci"
           git config user.email "agente-ci@users.noreply.github.com"
           slug=$(basename "$PRD_FILE" .md)
-          branch="agent/$slug"
+          branch="agent/$slug-wave${{ github.run_number }}"
           git checkout -b "$branch"
           echo "branch=$branch" >> "$GITHUB_ENV"
           echo "slug=$slug" >> "$GITHUB_ENV"
