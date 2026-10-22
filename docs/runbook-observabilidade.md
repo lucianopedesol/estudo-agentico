@@ -35,7 +35,7 @@ sh scripts/metricas-agentico.sh        # últimos 14 dias
 sh scripts/metricas-agentico.sh 30     # últimos 30 dias
 ```
 
-Requer `gh` autenticado e `jq`. Reporta: PRs mergeados, tempo até merge (mediana e média),
+Requer apenas `gh` autenticado (o avaliador de expressoes jq vem embutido no proprio `gh`, nao precisa instalar `jq` separado). Funciona em Git Bash e WSL2. Reporta: PRs mergeados, tempo até merge (mediana e média),
 fatia de PRs com comentário/review, tamanho mediano do PR e razão de retrabalho.
 
 **Rode hoje, antes de mexer em mais qualquer coisa.** O número de hoje é a linha de base.
