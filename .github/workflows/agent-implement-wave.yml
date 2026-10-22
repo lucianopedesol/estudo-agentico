@@ -4,12 +4,25 @@ name: Agente implementa uma wave de PRDs (matrix)
 # prds/, separados por vírgula) e cada uma vira um job de CI isolado, rodando em
 # paralelo. Não precisa de git worktree - cada job do GitHub Actions já roda numa
 # máquina virtual própria, com seu próprio checkout.
+#
+# O input "modo" existe pra testar a mecânica da wave (matrix, isolamento, PR por
+# card) sem gastar API de verdade: "simulado" pula a chamada ao Claude Code e só
+# cria um arquivo marcador no lugar, pra provar que o paralelismo e os PRs
+# funcionam. "real" faz a implementação de verdade via ANTHROPIC_API_KEY.
 on:
   workflow_dispatch:
     inputs:
       prds:
         description: 'PRDs da wave, nomes de arquivo em prds/ separados por vírgula (ex: card-a.md,card-b.md)'
         required: true
+      modo:
+        description: 'simulado (sem custo de API, só testa a mecânica) ou real (chama o Claude Code de verdade)'
+        required: true
+        default: 'simulado'
+        type: choice
+        options:
+          - simulado
+          - real
 
 permissions:
   contents: write
@@ -26,7 +39,7 @@ jobs:
           IFS=',' read -ra ITEMS <<< "${{ inputs.prds }}"
           json=$(printf '%s\n' "${ITEMS[@]}" | sed '/^$/d' | jq -R . | jq -s .)
           echo "matrix={\"prd\":$json}" >> "$GITHUB_OUTPUT"
-          echo "Wave com os seguintes PRDs: $json"
+          echo "Wave com os seguintes PRDs: $json (modo: ${{ inputs.modo }})"
 
   implementar:
     needs: montar-wave
@@ -47,11 +60,8 @@ jobs:
 
       - run: npm ci
 
-      - run: npm install -g @anthropic-ai/claude-code
-
-      - name: Implementar o card desta wave
+      - name: Preparar branch do card
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           PRD_FILE: ${{ matrix.prd }}
         run: |
           git config user.name "agente-ci"
@@ -59,6 +69,32 @@ jobs:
           slug=$(basename "$PRD_FILE" .md)
           branch="agent/$slug"
           git checkout -b "$branch"
+          echo "branch=$branch" >> "$GITHUB_ENV"
+          echo "slug=$slug" >> "$GITHUB_ENV"
+
+      - name: Implementar o card (simulado - sem custo de API)
+        if: ${{ inputs.modo == 'simulado' }}
+        env:
+          PRD_FILE: ${{ matrix.prd }}
+        run: |
+          mkdir -p .wave-simulada
+          cat > ".wave-simulada/${{ env.slug }}.md" << EOF
+          Execução simulada da wave.
+          PRD: $PRD_FILE
+          Job: ${{ github.job }} / matrix: ${{ matrix.prd }}
+          Isso prova que este card roda isolado dos outros da mesma wave,
+          sem depender de git worktree e sem chamar a API de verdade.
+          EOF
+          git add -A
+          git commit -m "test(wave): execução simulada de prds/$PRD_FILE" || echo "nada para commitar"
+
+      - name: Implementar o card (real - chama o Claude Code)
+        if: ${{ inputs.modo == 'real' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PRD_FILE: ${{ matrix.prd }}
+        run: |
+          npm install -g @anthropic-ai/claude-code
 
           claude -p "Implemente a PRD em prds/$PRD_FILE seguindo exatamente o
           CLAUDE.md deste repositório e a skill criar-feature-react. Rode npm run
@@ -67,14 +103,14 @@ jobs:
 
           git add -A
           git commit -m "feat: implementação automática de prds/$PRD_FILE (wave)" || echo "nada para commitar"
-          git push -u origin "$branch"
-          echo "branch=$branch" >> "$GITHUB_ENV"
 
-      - name: Abrir PR deste card
+      - name: Subir branch e abrir PR deste card
         env:
           GH_TOKEN: ${{ github.token }}
+          PRD_FILE: ${{ matrix.prd }}
         run: |
+          git push -u origin "${{ env.branch }}"
           gh pr create \
-            --title "feat: implementação automática de ${{ matrix.prd }} (wave)" \
-            --body "PR aberto automaticamente como parte de uma wave. Este card é independente dos demais da mesma wave - precisa passar pelo CI e pela revisão antes de mergear, igual qualquer outro PR." \
-            --base main --head "$branch"
+            --title "feat: implementação automática de $PRD_FILE (wave, modo ${{ inputs.modo }})" \
+            --body "PR aberto automaticamente como parte de uma wave (modo: ${{ inputs.modo }}). Este card é independente dos demais da mesma wave - precisa passar pelo CI e pela revisão antes de mergear, igual qualquer outro PR." \
+            --base main --head "${{ env.branch }}"
