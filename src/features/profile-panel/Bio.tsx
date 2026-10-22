@@ -1,4 +1,16 @@
-// Stub — lógica real entra em painel-perfil-bio-editavel.md
+import { useState } from 'react'
+import { BioTextArea } from './Bio.styles'
+
 export function Bio() {
-  return null
+  const [bio, setBio] = useState('')
+
+  return (
+    <BioTextArea
+      value={bio}
+      onChange={(event) => setBio(event.target.value)}
+      placeholder="Escreva algo sobre você..."
+      rows={3}
+      aria-label="Bio"
+    />
+  )
 }
