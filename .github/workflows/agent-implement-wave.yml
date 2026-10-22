@@ -37,7 +37,7 @@ jobs:
       - id: build
         run: |
           IFS=',' read -ra ITEMS <<< "${{ inputs.prds }}"
-          json=$(printf '%s\n' "${ITEMS[@]}" | sed '/^$/d' | jq -R . | jq -s .)
+          json=$(printf '%s\n' "${ITEMS[@]}" | sed '/^$/d' | jq -R . | jq -sc .)
           echo "matrix={\"prd\":$json}" >> "$GITHUB_OUTPUT"
           echo "Wave com os seguintes PRDs: $json (modo: ${{ inputs.modo }})"
 
