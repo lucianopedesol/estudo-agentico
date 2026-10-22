@@ -1,0 +1,80 @@
+name: Agente implementa uma wave de PRDs (matrix)
+
+# Disparo manual: você passa a lista de PRDs da wave (nomes de arquivo dentro de
+# prds/, separados por vírgula) e cada uma vira um job de CI isolado, rodando em
+# paralelo. Não precisa de git worktree - cada job do GitHub Actions já roda numa
+# máquina virtual própria, com seu próprio checkout.
+on:
+  workflow_dispatch:
+    inputs:
+      prds:
+        description: 'PRDs da wave, nomes de arquivo em prds/ separados por vírgula (ex: card-a.md,card-b.md)'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  montar-wave:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - id: build
+        run: |
+          IFS=',' read -ra ITEMS <<< "${{ inputs.prds }}"
+          json=$(printf '%s\n' "${ITEMS[@]}" | sed '/^$/d' | jq -R . | jq -s .)
+          echo "matrix={\"prd\":$json}" >> "$GITHUB_OUTPUT"
+          echo "Wave com os seguintes PRDs: $json"
+
+  implementar:
+    needs: montar-wave
+    strategy:
+      # fail-fast: false é a decisão que fecha a pergunta "um card falha, a wave
+      # inteira para?" - não. Cada card da wave é independente; um falhando não
+      # cancela os outros, cada um segue seu próprio caminho até o PR.
+      fail-fast: false
+      matrix: ${{ fromJson(needs.montar-wave.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm install -g @anthropic-ai/claude-code
+
+      - name: Implementar o card desta wave
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PRD_FILE: ${{ matrix.prd }}
+        run: |
+          git config user.name "agente-ci"
+          git config user.email "agente-ci@users.noreply.github.com"
+          slug=$(basename "$PRD_FILE" .md)
+          branch="agent/$slug"
+          git checkout -b "$branch"
+
+          claude -p "Implemente a PRD em prds/$PRD_FILE seguindo exatamente o
+          CLAUDE.md deste repositório e a skill criar-feature-react. Rode npm run
+          lint e npm run test e garanta que os dois passam antes de parar." \
+            --permission-mode acceptEdits
+
+          git add -A
+          git commit -m "feat: implementação automática de prds/$PRD_FILE (wave)" || echo "nada para commitar"
+          git push -u origin "$branch"
+          echo "branch=$branch" >> "$GITHUB_ENV"
+
+      - name: Abrir PR deste card
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --title "feat: implementação automática de ${{ matrix.prd }} (wave)" \
+            --body "PR aberto automaticamente como parte de uma wave. Este card é independente dos demais da mesma wave - precisa passar pelo CI e pela revisão antes de mergear, igual qualquer outro PR." \
+            --base main --head "$branch"
