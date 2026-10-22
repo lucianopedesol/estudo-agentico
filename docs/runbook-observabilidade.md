@@ -24,7 +24,7 @@ e não dizem nada sobre saúde. As quatro que importam:
 | Custo por tarefa entregue | Vale a pena? | OTel `claude_code.cost.usage` ÷ PRs mergeados |
 | Taxa de aceite do diff | O agente acerta o padrão do projeto? | OTel `claude_code.code_edit_tool.decision` |
 | Retrabalho | O PR que ficou verde voltou? | git — commits `fix:`/`revert` |
-| Escrutínio | A revisão ainda é revisão? | % de PRs com comentário substantivo |
+| Escrutinio | A revisao ainda e revisao? | % de PRs com comentario de **outra pessoa** — bot de deploy e comentario do autor nao contam |
 
 As duas últimas saem do git e do GitHub, sem infraestrutura nenhuma — é o que o script faz.
 
@@ -36,7 +36,7 @@ sh scripts/metricas-agentico.sh 30     # últimos 30 dias
 ```
 
 Requer apenas `gh` autenticado (o avaliador de expressoes jq vem embutido no proprio `gh`, nao precisa instalar `jq` separado). Funciona em Git Bash e WSL2. Reporta: PRs mergeados, tempo até merge (mediana e média),
-fatia de PRs com comentário/review, tamanho mediano do PR e razão de retrabalho.
+fatia de PRs com revisao HUMANA (bots e o proprio autor sao excluidos da conta), fatia com comentario automatizado, tamanho mediano do PR e razao de retrabalho.
 
 **Rode hoje, antes de mexer em mais qualquer coisa.** O número de hoje é a linha de base.
 Depois, semanalmente — cinco minutos de sexta-feira.

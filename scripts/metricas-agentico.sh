@@ -21,15 +21,25 @@ echo
 TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT
 
-# Uma única chamada à API. Sai em TSV: horas_ate_merge, interacoes, tamanho_diff.
-# A filtragem e a aritmética de data acontecem dentro do --jq do gh.
+# Uma única chamada à API. Sai em TSV com 4 colunas:
+#   1 horas_ate_merge  2 vozes_humanas  3 vozes_automatizadas  4 tamanho_diff
+# Separar humano de bot é o que impede o número de mentir: comentário de deploy
+# preview do Netlify não é revisão, e comentário do próprio autor também não.
 gh pr list --state merged --limit 200 \
-  --json number,createdAt,mergedAt,comments,reviews,additions,deletions \
+  --json number,author,createdAt,mergedAt,comments,reviews,additions,deletions \
   --jq "
     .[]
     | select(.mergedAt >= \"${DESDE}\")
+    | (.author.login) as \$autor
+    | ([ (.comments[]?.author.login), (.reviews[]?.author.login) ]) as \$vozes
+    | ([ \$vozes[]
+         | select(. != \$autor)
+         | select(endswith(\"[bot]\") | not)
+         | select(. as \$l | [\"netlify\",\"github-actions\",\"dependabot\",\"renovate\",\"codecov\",\"vercel\",\"sonarcloud\",\"coderabbitai\",\"claude\"] | index(\$l) | not)
+       ] | length) as \$humanos
     | [ (((.mergedAt|fromdate) - (.createdAt|fromdate)) / 3600)
-      , ((.comments|length) + (.reviews|length))
+      , \$humanos
+      , ((\$vozes|length) - \$humanos)
       , (.additions + .deletions)
       ]
     | @tsv
@@ -47,18 +57,23 @@ mediana() { cut -f"$1" "$TMP" | sort -n | awk '{v[NR]=$1} END{print v[int((NR+1)
 
 # 1. Tempo até merge — proxy de lead time
 MED_H=$(mediana 1)
-MEDIA_H=$(cut -f1 "$TMP" | awk '{s+=$1} END{printf "%.1f", s/NR}')
-printf "Tempo até merge (h): mediana %.1f  média %s\n" "$MED_H" "$MEDIA_H"
+MEDIA_H=$(cut -f1 "$TMP" | awk '{s+=$1} END{print s/NR}')
+# Abaixo de 1h a unidade "hora" esconde a informação: num repo solo todos os PRs
+# são mergeados em minutos, e tudo vira 0.0.
+echo "$MED_H $MEDIA_H" | awk '{
+  if ($1 < 1) printf "Tempo até merge: mediana %.0f min  média %.0f min\n", $1*60, $2*60;
+  else        printf "Tempo até merge: mediana %.1f h  média %.1f h\n", $1, $2 }'
 
 # 2. Fatia de PRs com comentário substantivo — sinal de escrutínio real.
 #    Referência pública: na Anthropic esse número subiu de 16%% para 54%%
 #    conforme a automação cresceu. Caindo = revisão virou carimbo.
-cut -f2 "$TMP" | awk -v t="$TOTAL" '$1>0{c++} END{printf "PRs com comentário/review: %d/%d (%d%%)\n", c, t, (c*100)/t}'
+cut -f2 "$TMP" | awk -v t="$TOTAL" '$1>0{c++} END{printf "PRs com revisão HUMANA: %d/%d (%d%%)   <-- a métrica que importa\n", c, t, (c*100)/t}'
+cut -f3 "$TMP" | awk -v t="$TOTAL" '$1>0{c++} END{printf "PRs com comentário automatizado: %d/%d (bot de deploy, revisor de IA — informativo)\n", c, t}'
 
 # 3. Tamanho do diff — lote pequeno é uma das sete práticas que a DORA
 #    associa a ganho real com IA.
-MED_D=$(mediana 3)
-MAX_D=$(cut -f3 "$TMP" | sort -n | tail -1)
+MED_D=$(mediana 4)
+MAX_D=$(cut -f4 "$TMP" | sort -n | tail -1)
 echo "Tamanho do PR (linhas): mediana ${MED_D}  máximo ${MAX_D}"
 
 # 4. Retrabalho — commits de correção depois do merge.
