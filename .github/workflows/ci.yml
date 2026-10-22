@@ -6,15 +6,34 @@ on:
   push:
     branches: [main]
 
+# Uma execução por branch: push novo cancela a anterior, não acumula custo de runner.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  verificacao:
+    name: Verificação determinística
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test -- --ci
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Testes
+        run: npm run test -- --ci
+
+      # Portão que faltava: `npm run build` roda `tsc -b`, então erro de tipo
+      # reprova aqui em vez de aparecer só no deploy do Netlify, depois do merge.
+      - name: Build (inclui type check)
+        run: npm run build

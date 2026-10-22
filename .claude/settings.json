@@ -8,6 +8,7 @@
       "Bash(npm run test:*)",
       "Bash(npm run build)",
       "Bash(npm run dev)",
+      "Bash(npm run verificar)",
       "Bash(git status)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
@@ -18,17 +19,24 @@
     "ask": [
       "Bash(git push:*)",
       "Bash(npm install:*)",
+      "Bash(gh pr create:*)",
       "Edit(*.env*)",
       "Edit(netlify.toml)",
-      "Edit(package.json)"
+      "Edit(package.json)",
+      "Edit(.github/workflows/*)",
+      "Edit(.claude/settings.json)"
     ],
     "deny": [
       "Bash(git push --force:*)",
       "Bash(git push origin main)",
       "Bash(rm -rf:*)",
-      "Bash(netlify deploy --prod:*)"
+      "Bash(netlify deploy --prod:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh secret:*)",
+      "Bash(gh api -X DELETE:*)"
     ]
   },
+
   "hooks": {
     "PreToolUse": [
       {
@@ -41,5 +49,18 @@
         ]
       }
     ]
+  },
+
+  "sandbox": {
+    "enabled": true,
+    "network": {
+      "allowedDomains": [
+        "registry.npmjs.org",
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        "objects.githubusercontent.com"
+      ]
+    }
   }
 }

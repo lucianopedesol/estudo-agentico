@@ -1,0 +1,53 @@
+# Revisor automático de PR (plano P3-c da arquitetura-alvo).
+#
+# Pipeline do plugin: find -> verify -> rank -> post. Ele comenta inline e NUNCA
+# aprova nem bloqueia o PR — a decisão de merge continua sendo do time.
+#
+# Fica inerte enquanto a secret ANTHROPIC_API_KEY não existir no repositório:
+# o job roda, pula o passo e termina verde. Ative só depois da Fase 2.
+#
+# Rodar em SHADOW MODE por 2 semanas: o revisor comenta, ninguém é obrigado a
+# agir. Anotar quantos achados eram reais — esse número decide se ele entra no
+# fluxo de verdade.
+
+name: Revisão automática
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  revisao:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    env:
+      TEM_CHAVE: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      - name: Aviso quando a secret não está configurada
+        if: env.TEM_CHAVE != 'true'
+        run: echo "ANTHROPIC_API_KEY não configurada — revisão automática desativada (esperado até a Fase 3)."
+
+      - uses: actions/checkout@v6
+        if: env.TEM_CHAVE == 'true'
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        if: env.TEM_CHAVE == 'true'
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment"
+            --max-turns 20

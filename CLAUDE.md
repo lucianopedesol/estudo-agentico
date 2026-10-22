@@ -1,5 +1,8 @@
 # CLAUDE.md
 
+> As regras compartilhadas entre harnesses (Claude Code, Cursor, Codex) estao em
+> [`AGENTS.md`](./AGENTS.md). Este arquivo complementa com o que e especifico do Claude Code.
+
 ## Sobre o projeto
 estudo-agentico — projeto React usado para aprender e validar, na prática, um fluxo
 de desenvolvimento agentic (planejamento → código → revisão → testes → publicação).
