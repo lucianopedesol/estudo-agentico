@@ -2,13 +2,19 @@ name: Agente implementa uma wave de PRDs (matrix)
 
 # Disparo manual: você passa a lista de PRDs da wave (nomes de arquivo dentro de
 # prds/, separados por vírgula) e cada uma vira um job de CI isolado, rodando em
-# paralelo. Não precisa de git worktree - cada job do GitHub Actions já roda numa
+# paralelo. Não precisa de git worktree — cada job do GitHub Actions já roda numa
 # máquina virtual própria, com seu próprio checkout.
 #
 # O input "modo" existe pra testar a mecânica da wave (matrix, isolamento, PR por
 # card) sem gastar API de verdade: "simulado" pula a chamada ao Claude Code e só
 # cria um arquivo marcador no lugar, pra provar que o paralelismo e os PRs
 # funcionam. "real" faz a implementação de verdade via ANTHROPIC_API_KEY.
+#
+# Tetos de custo desta wave:
+#   - max-parallel: 3   → no máximo 3 cards consumindo API ao mesmo tempo
+#   - LIMITE_CARDS: 6   → wave maior que isso é recusada antes de começar
+#   - timeout-minutes   → job travado morre sozinho
+#   - --max-turns       → teto por card
 on:
   workflow_dispatch:
     inputs:
@@ -31,25 +37,56 @@ permissions:
 jobs:
   montar-wave:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
+    env:
+      LIMITE_CARDS: 6
+      TEM_CHAVE: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     steps:
+      - name: Recusar disparo por bot
+        run: |
+          ator="${{ github.actor }}"
+          case "$ator" in
+            *"[bot]"|*"-bot"|agente-ci)
+              echo "::error::Disparo por ator automatizado ($ator) recusado — evita loop agente→agente."
+              exit 1 ;;
+            *) echo "Wave disparada por $ator — ok." ;;
+          esac
+
+      - name: Validar a secret no modo real
+        if: inputs.modo == 'real' && env.TEM_CHAVE != 'true'
+        run: |
+          echo "::error::Modo 'real' pedido sem ANTHROPIC_API_KEY configurada. Use o modo 'simulado' ou configure a secret."
+          exit 1
+
       - id: build
         run: |
           IFS=',' read -ra ITEMS <<< "${{ inputs.prds }}"
           json=$(printf '%s\n' "${ITEMS[@]}" | sed '/^$/d' | jq -R . | jq -sc .)
+          qtd=$(echo "$json" | jq 'length')
+          if [ "$qtd" -gt "$LIMITE_CARDS" ]; then
+            echo "::error::Wave com $qtd cards excede o limite de $LIMITE_CARDS. Quebre em duas waves."
+            exit 1
+          fi
+          # jq -sc (compacto, uma linha só): $GITHUB_OUTPUT não aceita valor
+          # multi-linha sem sintaxe heredoc — jq -s puro quebraria aqui.
           echo "matrix={\"prd\":$json}" >> "$GITHUB_OUTPUT"
-          echo "Wave com os seguintes PRDs: $json (modo: ${{ inputs.modo }})"
+          echo "Wave com $qtd card(s): $json (modo: ${{ inputs.modo }})"
 
   implementar:
     needs: montar-wave
     strategy:
       # fail-fast: false é a decisão que fecha a pergunta "um card falha, a wave
-      # inteira para?" - não. Cada card da wave é independente; um falhando não
+      # inteira para?" — não. Cada card da wave é independente; um falhando não
       # cancela os outros, cada um segue seu próprio caminho até o PR.
       fail-fast: false
+      # Teto de gasto simultâneo: a wave pode ter 6 cards, mas só 3 queimam
+      # API ao mesmo tempo. Os outros esperam na fila.
+      max-parallel: 3
       matrix: ${{ fromJson(needs.montar-wave.outputs.matrix) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -67,12 +104,15 @@ jobs:
           git config user.name "agente-ci"
           git config user.email "agente-ci@users.noreply.github.com"
           slug=$(basename "$PRD_FILE" .md)
+          # github.run_number no nome: uma wave que falhou no meio deixa branch
+          # órfã no remoto; sem o número, a próxima tentativa do mesmo card é
+          # rejeitada por histórico divergente.
           branch="agent/$slug-wave${{ github.run_number }}"
           git checkout -b "$branch"
           echo "branch=$branch" >> "$GITHUB_ENV"
           echo "slug=$slug" >> "$GITHUB_ENV"
 
-      - name: Implementar o card (simulado - sem custo de API)
+      - name: Implementar o card (simulado — sem custo de API)
         if: ${{ inputs.modo == 'simulado' }}
         env:
           PRD_FILE: ${{ matrix.prd }}
@@ -88,7 +128,7 @@ jobs:
           git add -A
           git commit -m "test(wave): execução simulada de prds/$PRD_FILE" || echo "nada para commitar"
 
-      - name: Implementar o card (real - chama o Claude Code)
+      - name: Implementar o card (real — chama o Claude Code)
         if: ${{ inputs.modo == 'real' }}
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -97,12 +137,20 @@ jobs:
           npm install -g @anthropic-ai/claude-code
 
           claude -p "Implemente a PRD em prds/$PRD_FILE seguindo exatamente o
-          CLAUDE.md deste repositório e a skill criar-feature-react. Rode npm run
-          lint e npm run test e garanta que os dois passam antes de parar." \
-            --permission-mode acceptEdits
+          AGENTS.md deste repositório e a skill criar-feature-react. Respeite a lista
+          'Arquivos que esta PRD pode tocar' e a seção 'Fora de escopo' da PRD: não
+          altere nada fora dela — outros cards desta wave estão mexendo em arquivos
+          vizinhos. Ao final, rode 'npm run verificar' e garanta que passa." \
+            --permission-mode acceptEdits \
+            --max-turns 40
 
           git add -A
           git commit -m "feat: implementação automática de prds/$PRD_FILE (wave)" || echo "nada para commitar"
+
+      - name: Verificação determinística
+        id: verif
+        continue-on-error: true
+        run: npm run verificar
 
       - name: Subir branch e abrir PR deste card
         env:
@@ -110,7 +158,16 @@ jobs:
           PRD_FILE: ${{ matrix.prd }}
         run: |
           git push -u origin "${{ env.branch }}"
-          gh pr create \
+          if [ "${{ steps.verif.outcome }}" = "success" ]; then
+            draft=""; estado="✅ \`npm run verificar\` passou no runner."
+          else
+            draft="--draft"; estado="⚠️ \`npm run verificar\` **falhou** no runner — PR aberto como draft."
+          fi
+          gh pr create $draft \
             --title "feat: implementação automática de $PRD_FILE (wave, modo ${{ inputs.modo }})" \
-            --body "PR aberto automaticamente como parte de uma wave (modo: ${{ inputs.modo }}). Este card é independente dos demais da mesma wave - precisa passar pelo CI e pela revisão antes de mergear, igual qualquer outro PR." \
+            --body "PR aberto automaticamente como parte de uma wave (modo: ${{ inputs.modo }}).
+
+          $estado
+
+          Este card é independente dos demais da mesma wave — precisa passar pelo CI e pela revisão antes de mergear, igual qualquer outro PR." \
             --base main --head "${{ env.branch }}"

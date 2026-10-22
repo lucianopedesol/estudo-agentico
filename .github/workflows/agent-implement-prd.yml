@@ -2,6 +2,18 @@ name: Agente implementa PRD automaticamente
 
 # Gatilho do Nível 2: uma PRD nova (ou alterada) chegando em main dispara
 # o agente em modo headless, sem nenhum humano abrir sessão.
+#
+# Três controles que este workflow aplica, nesta ordem:
+#   1. PORTÃO DE QUEM DISPARA  - ator bot é recusado, para não existir
+#      agente acionando agente em loop.
+#   2. TETO DE CUSTO           - timeout do job, --max-turns e concurrency.
+#   3. VERIFICAÇÃO             - `npm run verificar` roda antes do PR; se
+#      falhar, o PR nasce como DRAFT, sinalizando que não está pronto.
+#
+# Este workflow NUNCA mergeia. Ele chega até abrir o PR; o CI obrigatório e a
+# branch protection continuam sendo o portão final.
+# Fica inerte enquanto a secret ANTHROPIC_API_KEY não existir.
+
 on:
   push:
     branches: [main]
@@ -12,32 +24,68 @@ permissions:
   contents: write
   pull-requests: write
 
+# Um push novo em main cancela a execução anterior: evita duas implementações
+# da mesma PRD rodando em paralelo e queimando API duas vezes.
+concurrency:
+  group: agente-prd-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   implement:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TEM_CHAVE: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     steps:
+      # ---- Portão 1: quem disparou -------------------------------------
+      # A lição pública mais útil de 2026 sobre agentes: um agente pediu a
+      # outro, por mensagem, que desse push no código. A defesa não é instruir
+      # o modelo a recusar — é a fronteira de acesso não deixar acontecer.
+      - name: Recusar disparo por bot
+        run: |
+          ator="${{ github.actor }}"
+          case "$ator" in
+            *"[bot]"|*"-bot"|agente-ci)
+              echo "::error::Disparo por ator automatizado ($ator) recusado — evita loop agente→agente."
+              exit 1 ;;
+            *) echo "Disparado por $ator — ok." ;;
+          esac
+
+      - name: Avisar quando a secret não está configurada
+        if: env.TEM_CHAVE != 'true'
+        run: echo "ANTHROPIC_API_KEY ausente — disparo automático desativado (esperado até a Fase 3)."
+
       - uses: actions/checkout@v4
+        if: env.TEM_CHAVE == 'true'
         with:
           fetch-depth: 2
 
       - name: Detectar PRD nova/alterada neste push
         id: prd
+        if: env.TEM_CHAVE == 'true'
         run: |
-          file=$(git diff --name-only HEAD^ HEAD -- 'prds/*.md' | head -1)
+          file=$(git diff --name-only HEAD^ HEAD -- 'prds/*.md' | grep -v '_template.md' | head -1)
           echo "file=$file" >> "$GITHUB_OUTPUT"
-          echo "PRD detectada: $file"
+          echo "PRD detectada: ${file:-nenhuma}"
 
       - uses: actions/setup-node@v4
-        if: steps.prd.outputs.file != ''
+        if: env.TEM_CHAVE == 'true' && steps.prd.outputs.file != ''
         with:
           node-version: '20'
+          cache: 'npm'
+
+      # Sem isto o agente não consegue rodar lint nem teste: não existe
+      # node_modules na máquina do runner.
+      - name: Instalar dependências do projeto
+        if: env.TEM_CHAVE == 'true' && steps.prd.outputs.file != ''
+        run: npm ci
 
       - name: Instalar Claude Code
-        if: steps.prd.outputs.file != ''
+        if: env.TEM_CHAVE == 'true' && steps.prd.outputs.file != ''
         run: npm install -g @anthropic-ai/claude-code
 
       - name: Criar branch e acionar o agente (modo headless)
-        if: steps.prd.outputs.file != ''
+        if: env.TEM_CHAVE == 'true' && steps.prd.outputs.file != ''
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           PRD_FILE: ${{ steps.prd.outputs.file }}
@@ -45,29 +93,54 @@ jobs:
           git config user.name "agente-ci"
           git config user.email "agente-ci@users.noreply.github.com"
           slug=$(basename "$PRD_FILE" .md)
-          branch="agent/$slug"
+          branch="agent/$slug-run${{ github.run_number }}"
           git checkout -b "$branch"
 
           # --permission-mode acceptEdits: aceita edições sem perguntar, porque
           # não há humano aqui para aprovar. Os guardrails de .claude/settings.json
-          # (allow/ask/deny) e os hooks continuam valendo - "ask" nesse modo
+          # (allow/ask/deny) e os hooks continuam valendo — "ask" nesse modo
           # se comporta como bloqueio, nunca como aprovação automática.
-          claude -p "Implemente a PRD em $PRD_FILE seguindo exatamente o CLAUDE.md deste
-          repositório e a skill criar-feature-react. Ao final, rode npm run lint e
-          npm run test e garanta que os dois passam antes de parar." \
-            --permission-mode acceptEdits
+          # --max-turns: teto de custo por execução. Uma PRD bem escrita cabe
+          # folgada em 40 turnos; estourar é sinal de PRD ambígua, não de tarefa
+          # difícil — e é mais barato falhar do que insistir.
+          claude -p "Implemente a PRD em $PRD_FILE seguindo exatamente o AGENTS.md
+          deste repositório e a skill criar-feature-react. Respeite a lista 'Arquivos
+          que esta PRD pode tocar' e a seção 'Fora de escopo' da PRD: não altere nada
+          fora dela. Ao final, rode 'npm run verificar' e garanta que passa antes de
+          parar." \
+            --permission-mode acceptEdits \
+            --max-turns 40
 
           git add -A
           git commit -m "feat: implementação automática a partir de $PRD_FILE" || echo "nada para commitar"
           git push -u origin "$branch"
           echo "branch=$branch" >> "$GITHUB_ENV"
 
+      # ---- Portão 3: verificação antes de pedir atenção humana ----------
+      # continue-on-error: falhar aqui não cancela o PR — muda o que o PR
+      # comunica. PR verde = pronto para revisão. PR draft = o agente não
+      # conseguiu fechar, alguém precisa olhar antes.
+      - name: Verificação determinística
+        id: verif
+        if: env.TEM_CHAVE == 'true' && steps.prd.outputs.file != ''
+        continue-on-error: true
+        run: npm run verificar
+
       - name: Abrir PR
-        if: steps.prd.outputs.file != ''
+        if: env.TEM_CHAVE == 'true' && steps.prd.outputs.file != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh pr create \
+          if [ "${{ steps.verif.outcome }}" = "success" ]; then
+            draft=""; estado="✅ \`npm run verificar\` passou no runner."
+          else
+            draft="--draft"; estado="⚠️ \`npm run verificar\` **falhou** no runner — PR aberto como draft."
+          fi
+          gh pr create $draft \
             --title "feat: implementação automática de ${{ steps.prd.outputs.file }}" \
-            --body "PR aberto automaticamente pelo agente a partir da PRD \`${{ steps.prd.outputs.file }}\`. Precisa passar pelo CI e pela revisão antes de mergear — este workflow só abre o PR, nunca mergeia." \
+            --body "PR aberto automaticamente pelo agente a partir da PRD \`${{ steps.prd.outputs.file }}\`.
+
+          $estado
+
+          Precisa passar pelo CI e pela revisão antes de mergear — este workflow só abre o PR, nunca mergeia." \
             --base main --head "$branch"

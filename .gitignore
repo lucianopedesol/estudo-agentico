@@ -3,3 +3,10 @@ dist
 .env
 .env.*
 *.log
+
+# Artefatos emitidos pelo `tsc -b` na raiz (quebram a resolução de config do Jest)
+*.tsbuildinfo
+/jest.config.js
+/jest.config.d.ts
+/vite.config.js
+/vite.config.d.ts
